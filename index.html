@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="fr"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Conso Enedis</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--mut:#555;--line:#e5e7eb;--th:#f3f4f6;--bl:#2563eb}
+@media(prefers-color-scheme:dark){:root{--bg:#161a22;--fg:#e6e8ee;--mut:#9aa3b2;--line:#2a3140;--th:#1f2530;--bl:#5b8cff}}
+body{font-family:system-ui,sans-serif;background:var(--bg);color:var(--fg);margin:0;padding:16px;max-width:900px;margin:auto}
+h2{font-size:1.1em;color:var(--bl);margin:0 0 10px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+button,select,input{font:inherit;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--th);color:var(--fg)}
+button{cursor:pointer}button:hover{border-color:var(--bl)}
+details{margin-bottom:10px;font-size:.9em}
+#msg{font-size:.85em;color:var(--mut);min-height:1.2em;margin-bottom:8px}
+.st{display:flex;flex-wrap:wrap;gap:16px;font-size:.9em;margin:8px 0}
+canvas{width:100%;height:200px;display:block}
+table{border-collapse:collapse;width:100%;font-size:.85em;margin-top:10px}
+th{background:var(--th);color:var(--mut);text-align:left;padding:7px 10px;border-bottom:2px solid var(--line);font-size:.78em;text-transform:uppercase}
+td{padding:7px 10px;border-bottom:1px solid var(--line)}
+.good{color:#16a34a;font-weight:600}.warn{color:#d97706;font-weight:600}.bad{color:#dc2626;font-weight:600}
+</style></head><body>
+<h2>⚡ Conso Enedis — derniers jours</h2>
+<div class="bar">
+ <label>📂 CSV <input type="file" id="f" accept=".csv,.txt"></label>
+ <label>Période <select id="n"><option>7</option><option selected>15</option><option>30</option><option>90</option></select> j</label>
+ <button id="api">🔄 Conso API</button>
+ <button id="exp">⬇ Export CSV</button>
+ <button id="clr">🗑 Vider</button>
+</div>
+<details><summary>Réglages Conso API</summary>
+ <div class="bar">
+  <input id="tok" placeholder="Token" size="28" type="password">
+  <input id="prm" placeholder="PRM (14 chiffres)" size="18">
+  <label><input type="checkbox" id="mem"> mémoriser dans ce navigateur</label>
+ </div>
+ <small>Le token reste dans ce navigateur (jamais dans le dépôt). Si l'appel direct est bloqué (CORS), charge le fichier <code>enedis_conso.csv</code> produit par le script.</small>
+</details>
+<div id="msg">Charge un CSV (date;kwh) ou interroge Conso API.</div>
+<div class="st" id="st"></div>
+<canvas id="cv"></canvas>
+<table id="tb"><thead><tr><th>Date</th><th>kWh</th></tr></thead><tbody></tbody></table>
+<script>
+const $=id=>document.getElementById(id),JF=["dim","lun","mar","mer","jeu","ven","sam"];
+let data={};
+try{data=JSON.parse(localStorage.getItem("enedis_data")||"{}");$("tok").value=localStorage.getItem("enedis_tok")||"";$("prm").value=localStorage.getItem("enedis_prm")||"";$("mem").checked=!!$("tok").value}catch(e){}
+const save=()=>{try{localStorage.setItem("enedis_data",JSON.stringify(data))}catch(e){}};
+const msg=t=>$("msg").textContent=t;
+function iso(s){s=s.trim();let m=s.match(/^(\d{4})-(\d{2})-(\d{2})/);if(m)return m[0];m=s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);return m?`${m[3]}-${m[2]}-${m[1]}`:null}
+function parse(t){let n=0;for(const l of t.split(/\r?\n/)){const p=l.split(/[;\t]/);if(p.length<2)continue;const d=iso(p[0]),v=parseFloat(p[1].replace(",","."));if(d&&!isNaN(v)){data[d]=v;n++}}return n}
+$("f").onchange=async e=>{const f=e.target.files[0];if(!f)return;const n=parse(await f.text());save();render();msg(`${n} jours lus dans ${f.name}`)};
+$("api").onclick=async()=>{
+ const tok=$("tok").value.trim(),prm=$("prm").value.trim();
+ if(!tok||!prm){msg("Renseigne token et PRM (Réglages Conso API).");$("tok").closest("details").open=true;return}
+ if($("mem").checked){localStorage.setItem("enedis_tok",tok);localStorage.setItem("enedis_prm",prm)}else{localStorage.removeItem("enedis_tok");localStorage.removeItem("enedis_prm")}
+ const e=new Date(),s=new Date(e-(+$("n").value+5)*864e5),f=d=>d.toISOString().slice(0,10);
+ msg("Interrogation Conso API…");
+ try{
+  const r=await fetch(`https://conso.boris.sh/api/daily_consumption?prm=${encodeURIComponent(prm)}&start=${f(s)}&end=${f(e)}`,{headers:{Authorization:"Bearer "+tok}});
+  if(!r.ok)throw new Error("HTTP "+r.status);
+  const j=await r.json();let n=0;
+  for(const p of j.interval_reading){data[p.date.slice(0,10)]=p.value/1000;n++}
+  save();render();msg(`${n} jours reçus (données jusqu'à J-1).`);
+ }catch(x){msg("Échec : "+x.message+" — si CORS/réseau, utilise le CSV du script.")}
+};
+$("exp").onclick=()=>{const k=Object.keys(data).sort();if(!k.length)return;const t="date;kwh\n"+k.map(d=>d+";"+data[d].toFixed(3)).join("\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([t],{type:"text/csv"}));a.download="enedis_conso.csv";a.click()};
+$("clr").onclick=()=>{if(confirm("Vider les données de ce navigateur ?")){data={};save();render()}};
+$("n").onchange=render;
+function render(){
+ const k=Object.keys(data).sort().slice(-$("n").value),v=k.map(d=>data[d]),tb=$("tb").tBodies[0];tb.innerHTML="";
+ if(!k.length){$("st").textContent="";draw([],[],0);return}
+ const tot=v.reduce((a,b)=>a+b,0),moy=tot/v.length,mx=Math.max(...v),mn=Math.min(...v);
+ $("st").innerHTML=`<span>Total <b>${tot.toFixed(1)} kWh</b></span><span>Moyenne <b>${moy.toFixed(1)} kWh/j</b></span><span>Max <b>${mx.toFixed(1)}</b></span><span>Min <b>${mn.toFixed(1)}</b></span><span>Dernier relevé <b>${k[k.length-1]}</b></span>`;
+ for(let i=k.length-1;i>=0;i--){const x=v[i],c=x>1.3*moy?"bad":x>1.1*moy?"warn":"good",d=new Date(k[i]+"T12:00");
+  tb.insertAdjacentHTML("beforeend",`<tr><td>${JF[d.getDay()]} ${k[i].slice(8)}/${k[i].slice(5,7)}</td><td class="${c}">${x.toFixed(2)}</td></tr>`)}
+ draw(k,v,moy);
+}
+function draw(k,v,moy){
+ const c=$("cv"),r=devicePixelRatio||1,W=c.clientWidth,H=c.clientHeight;c.width=W*r;c.height=H*r;
+ const g=c.getContext("2d");g.scale(r,r);g.clearRect(0,0,W,H);if(!v.length)return;
+ const st=getComputedStyle(document.body),mut=st.getPropertyValue("--mut"),bl=st.getPropertyValue("--bl"),mx=Math.max(...v)*1.1,pl=34,pb=20,bw=(W-pl)/v.length;
+ g.font="11px system-ui";g.fillStyle=mut;g.strokeStyle=mut;
+ g.fillText(mx.toFixed(0),0,10);g.fillText("0",0,H-pb);
+ v.forEach((x,i)=>{const h=(H-pb-14)*x/mx;g.fillStyle=bl;g.fillRect(pl+i*bw+2,H-pb-h,bw-4,h);
+  if(v.length<=31){g.fillStyle=mut;g.fillText(k[i].slice(8),pl+i*bw+bw/2-6,H-6)}});
+ const y=H-pb-(H-pb-14)*moy/mx;g.setLineDash([4,3]);g.beginPath();g.moveTo(pl,y);g.lineTo(W,y);g.stroke();g.setLineDash([]);
+}
+addEventListener("resize",render);render();
+</script></body></html>
